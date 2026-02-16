@@ -1,5 +1,6 @@
 import sqlite3
 from datetime import datetime
+
 from backend.auth.password_utils import hash_password
 
 DATABASE_NAME = "users.db"
@@ -64,6 +65,7 @@ def create_tables():
     )
     """)
 def insert_sample_data():
+
     db = get_db()
     cursor = db.cursor()
     hashed_pw = hash_password("123456")
@@ -75,11 +77,13 @@ def insert_sample_data():
         ("David", "david@example.com", hashed_pw, "security"),
         ("Eve", "eve@example.com", hashed_pw, "user"),
         ("Shravya", "160622737111@stanley.edu.in", hashed_pw, "user")
+        
     ]
     cursor.executemany("INSERT OR IGNORE INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)", users)
 # Insert sample behavior logs
     logs = [
         (1, "Alice", datetime.now().isoformat(), 10, 1, "192.168.1.10", "192.168.1", "India", "Hyderabad", "device_fp_1", "Laptop", "Windows", "Chrome", "/dashboard", "login", "sess1", 30, 0, 0),
+
     ]
     cursor.executemany("""INSERT INTO behavior_logs 
         (user_id, username, timestamp, hour, day_of_week, ip_address, ip_prefix, location_country, location_city, device_fingerprint, device_type, os, browser, resource, action, session_id, session_duration, vpn_detected, proxy_detected) 
@@ -93,7 +97,9 @@ def insert_sample_data():
         (4, '{"login_hours":[16,17]}', datetime.now().isoformat(), 2, "8,9"),
         (5, '{"login_hours":[18,19]}', datetime.now().isoformat(), 2, "10,11")
     ]
+
     cursor.executemany("INSERT OR REPLACE INTO user_baselines (user_id, baseline_data, last_updated, data_points_count, source_log_ids) VALUES (?, ?, ?, ?, ?)", baselines)
+
     db.commit()
     db.close()
     print("Sample data inserted successfully!")
@@ -101,4 +107,6 @@ def insert_sample_data():
 # Run the functions
 if __name__ == "__main__":
     create_tables()
+
     insert_sample_data()
+
