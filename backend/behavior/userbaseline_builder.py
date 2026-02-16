@@ -2,7 +2,7 @@ import json
 from statistics import mean, stdev
 from collections import Counter
 from datetime import datetime
-from database import get_db
+from backend.database import get_db
 
 
 def build_user_baseline(user_id: int):
