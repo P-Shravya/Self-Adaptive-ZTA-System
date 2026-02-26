@@ -4,3 +4,9 @@ passlib==1.7.4
 bcrypt==4.0.1
 python-jose[cryptography]>=3.3.0
 pydantic>=2.5.0
+pyotp
+qrcode
+webauthn
+requests
+geopy
+user-agents

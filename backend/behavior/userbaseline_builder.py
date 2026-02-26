@@ -6,15 +6,26 @@ from backend.database import get_db
 
 
 def build_user_baseline(user_id: int):
+
     db = get_db()
 
     rows = db.execute("""
-        SELECT id, hour, day_of_week, ip_prefix,
-               location_country, location_city,
-               device_fingerprint, device_type,
-               os, browser,
-               resource, session_duration,
-               vpn_detected, proxy_detected
+        SELECT
+            id,
+            hour,
+            day_of_week,
+            ip_prefix,
+            location_country,
+            device_id,
+            device_type,
+            os,
+            browser,
+            session_duration,
+            vpn_detected,
+            failed_attempts,
+            typing_avg,
+            data_transfer,
+            download_volume
         FROM behavior_logs
         WHERE user_id = ?
         ORDER BY timestamp DESC
@@ -22,40 +33,54 @@ def build_user_baseline(user_id: int):
     """, (user_id,)).fetchall()
 
     if not rows:
+        db.close()
         return None
 
     log_ids = []
+
     hours = []
     days = []
     ip_prefixes = []
     countries = []
-    cities = []
-    fingerprints = []
+
+    device_ids = []
     device_types = []
     os_list = []
     browsers = []
-    resources = []
+
     durations = []
     vpn_flags = []
-    proxy_flags = []
+    failed_attempts_list = []
+
+    typing_vals = []
+    transfer_vals = []
+    download_vals = []
 
     for r in rows:
-        log_ids.append(r[0])
-        hours.append(r[1])
-        days.append(r[2])
-        ip_prefixes.append(r[3])
-        countries.append(r[4])
-        cities.append(r[5])
-        fingerprints.append(r[6])
-        device_types.append(r[7])
-        os_list.append(r[8])
-        browsers.append(r[9])
-        resources.append(r[10])
-        durations.append(r[11])
-        vpn_flags.append(r[12])
-        proxy_flags.append(r[13])
+
+        log_ids.append(r["id"])
+
+        hours.append(r["hour"])
+        days.append(r["day_of_week"])
+        ip_prefixes.append(r["ip_prefix"])
+        countries.append(r["location_country"])
+
+        device_ids.append(r["device_id"])
+        device_types.append(r["device_type"])
+        os_list.append(r["os"])
+        browsers.append(r["browser"])
+
+        durations.append(r["session_duration"])
+        vpn_flags.append(r["vpn_detected"])
+        failed_attempts_list.append(r["failed_attempts"])
+
+        typing_vals.append(r["typing_avg"])
+        transfer_vals.append(r["data_transfer"])
+        download_vals.append(r["download_volume"])
 
     baseline_data = {
+
+        # ================= TEMPORAL =================
         "temporal": {
             "login_hours": {
                 "mean": mean(hours),
@@ -64,38 +89,47 @@ def build_user_baseline(user_id: int):
                 "max": max(hours),
                 "distribution": dict(Counter(hours))
             },
-            "day_of_week": dict(Counter(days))
+            "day_of_week_distribution": dict(Counter(days))
         },
+
+        # ================= NETWORK =================
         "network": {
-            "ip_prefixes": dict(Counter(ip_prefixes)),
-            "countries": dict(Counter(countries)),
-            "cities": dict(Counter(cities)),
-            "vpn_usage_percentage": (sum(vpn_flags) / len(vpn_flags)) * 100,
-            "proxy_usage_percentage": (sum(proxy_flags) / len(proxy_flags)) * 100
+            "ip_prefix_distribution": dict(Counter(ip_prefixes)),
+            "country_distribution": dict(Counter(countries)),
+            "vpn_usage_percentage": (sum(vpn_flags) / len(vpn_flags)) * 100
         },
+
+        # ================= DEVICE =================
         "device": {
-            "device_fingerprints": list(set(fingerprints)),
-            "device_types": dict(Counter(device_types)),
+            "known_devices": list(set(device_ids)),
+            "device_type_distribution": dict(Counter(device_types)),
             "os_distribution": dict(Counter(os_list)),
             "browser_distribution": dict(Counter(browsers))
         },
-        "resource_access": {
-            "resources": dict(Counter(resources))
-        },
+
+        # ================= SESSION =================
         "session": {
-            "duration": {
-                "mean": mean(durations),
-                "std": stdev(durations) if len(durations) > 1 else 0,
-                "min": min(durations),
-                "max": max(durations)
-            }
+            "avg_duration": mean(durations) if durations else 0
         },
-        "security_flags": {
-            "vpn_detected_count": sum(vpn_flags),
-            "proxy_detected_count": sum(proxy_flags)
+
+        # ================= BEHAVIOR =================
+        "behavior": {
+            "avg_typing": mean(typing_vals) if typing_vals else 0
+        },
+
+        # ================= DATA =================
+        "data": {
+            "avg_data_transfer": mean(transfer_vals) if transfer_vals else 1,
+            "avg_download_volume": mean(download_vals) if download_vals else 1
+        },
+
+        # ================= SECURITY =================
+        "security": {
+            "avg_failed_attempts": mean(failed_attempts_list) if failed_attempts_list else 0
         }
     }
 
+    # Store baseline in DB
     db.execute("""
         INSERT OR REPLACE INTO user_baselines
         (user_id, baseline_data, last_updated,
@@ -110,5 +144,6 @@ def build_user_baseline(user_id: int):
     ))
 
     db.commit()
+    db.close()
 
     return baseline_data
