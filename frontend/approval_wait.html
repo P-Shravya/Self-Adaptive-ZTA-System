@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Waiting for Approval</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .spinner {
+    display: inline-block;
+    width: 18px; height: 18px;
+    border: 3px solid #ccc;
+    border-top-color: #2a5298;
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+    vertical-align: middle;
+    margin-right: 8px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #status-msg { margin-top: 16px; font-size: 0.9rem; color: #555; }
+</style>
+</head>
+
+<body>
+
+<div class="dashboard">
+  <h2>Manager Approval Required</h2>
+  <p>Your access request has been sent to a manager.</p>
+  <p><span class="spinner"></span> Waiting for approval — this page checks automatically.</p>
+  <p id="status-msg">Checking approval status…</p>
+</div>
+
+<div id="zta-notify-container"></div>
+
+<script src="zta_notify.js"></script>
+<script>
+/*
+ * FIX: Poll /api/approvals/status every 8 seconds so the user is
+ * automatically redirected when a manager approves the request.
+ * Previously this was a static page with no feedback loop at all.
+ *
+ * Backend requirement: expose GET /api/approvals/status that returns
+ * { "status": "pending" | "approved" | "rejected" | "expired" }
+ * for the currently authenticated user's latest request.
+ * The endpoint should be protected by get_current_user dependency.
+ */
+
+const token = localStorage.getItem("access_token");
+const redirectTo = localStorage.getItem("post_auth_redirect") || "dashboard.html";
+let pollCount = 0;
+const MAX_POLLS = 60; // stop after ~8 minutes
+
+async function checkApprovalStatus() {
+  if (!token) {
+    window.location.href = "login.html";
+    return;
+  }
+
+  try {
+    const res = await fetch("/api/approvals/status", {
+      headers: { "Authorization": "Bearer " + token }
+    });
+
+    if (!res.ok) {
+      document.getElementById("status-msg").innerText =
+        "Could not reach server. Retrying…";
+      return;
+    }
+
+    const data = await res.json();
+    const status = data.status;
+
+    if (status === "approved") {
+      ztaNotify("✅ Access approved! Redirecting…", "success");
+      clearInterval(pollInterval);
+      setTimeout(() => {
+        localStorage.removeItem("post_auth_redirect");
+        window.location.href = redirectTo;
+      }, 1200);
+
+    } else if (status === "rejected") {
+      ztaNotify("❌ Your request was rejected by the manager.", "error");
+      clearInterval(pollInterval);
+      document.getElementById("status-msg").innerText =
+        "Access denied. Please contact your manager or try logging in again.";
+
+    } else if (status === "expired") {
+      ztaNotify("⏰ Approval request expired. Please log in again.", "warning");
+      clearInterval(pollInterval);
+      setTimeout(() => window.location.href = "login.html", 2000);
+
+    } else {
+      // still pending
+      pollCount++;
+      const elapsed = Math.round(pollCount * 8 / 60);
+      document.getElementById("status-msg").innerText =
+        `Still waiting… (~${elapsed} min elapsed)`;
+
+      if (pollCount >= MAX_POLLS) {
+        clearInterval(pollInterval);
+        document.getElementById("status-msg").innerText =
+          "Timed out waiting. Please refresh or log in again.";
+      }
+    }
+
+  } catch (err) {
+    document.getElementById("status-msg").innerText = "Network error. Retrying…";
+  }
+}
+
+// Start polling immediately, then every 8 seconds
+checkApprovalStatus();
+const pollInterval = setInterval(checkApprovalStatus, 8000);
+</script>
+</body>
+</html>

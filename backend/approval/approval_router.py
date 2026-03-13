@@ -95,3 +95,39 @@ def get_approval_history(user=Depends(require_manager)):
     db.close()
 
     return {"approval_history": [dict(r) for r in logs]}
+
+
+@router.get("/status")
+def get_approval_status(user=Depends(get_current_user)):
+    db = get_db()
+    cursor = db.cursor()
+
+    # Check if still pending
+    pending = cursor.execute("""
+        SELECT requested_at FROM approval_requests
+        WHERE user_id=?
+        ORDER BY requested_at DESC LIMIT 1
+    """, (user["sub"],)).fetchone()
+
+    if pending:
+        from datetime import datetime, timedelta
+        age = datetime.utcnow() - datetime.fromisoformat(pending["requested_at"])
+        if age > timedelta(minutes=60):
+            db.close()
+            return {"status": "expired"}
+        db.close()
+        return {"status": "pending"}
+
+    # Check if approved/rejected in logs
+    log = cursor.execute("""
+        SELECT decision FROM approval_logs
+        WHERE user_id=?
+        ORDER BY decided_at DESC LIMIT 1
+    """, (user["sub"],)).fetchone()
+
+    db.close()
+
+    if log:
+        return {"status": log["decision"]}  # "approved" or "rejected"
+
+    return {"status": "pending"}

@@ -7,8 +7,7 @@ __pycache__/
 *.pyo
 *.pyd
 
-# SQLite database
-*.db
+
 
 # VS Code settings
 .vscode/
@@ -20,3 +19,8 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
+run.bat
+RUN.md
+
+zta_scenario_simulator.py
+zta_attack_simulator.py

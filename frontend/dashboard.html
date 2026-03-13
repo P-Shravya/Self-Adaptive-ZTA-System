@@ -3,6 +3,7 @@
 <head>
     <title>ZTA Dashboard</title>
     <link rel="stylesheet" href="style.css">
+    <script src="zta_notify.js"></script>
 </head>
 <body>
 
@@ -10,16 +11,92 @@
     <h2>Hospital Management System</h2>
 
     <div class="section-grid">
-        <a href="doctors.html" class="section-btn">Doctors</a>
-        <a href="pharmacy.html" class="section-btn">Pharmacy</a>
-        <a href="accounts.html" class="section-btn">Accounts / Finance</a>
-        <a href="interns.html" class="section-btn">Interns / Nurses</a>
-        <a href="manager.html" class="section-btn">Management</a>
-        <a href="lab.html" class="section-btn">Laboratory</a>
-        <a href="emergency.html" class="section-btn">Emergency</a>
-        <a href="settings.html" class="section-btn">Settings</a>
+        <a href="doctors.html"   class="section-btn" data-api="/api/doctors">Doctors</a>
+        <a href="pharmacy.html"  class="section-btn" data-api="/api/pharmacy">Pharmacy</a>
+        <a href="accounts.html"  class="section-btn" data-api="/api/admin">Accounts / Finance</a>
+        <a href="interns.html"   class="section-btn" data-api="/api/dashboard">Interns / Nurses</a>
+        <a href="manager.html"   class="section-btn" data-api="/api/approvals">Management</a>
+        <a href="lab.html"       class="section-btn" data-api="/api/lab">Laboratory</a>
+        <a href="emergency.html" class="section-btn" data-api="/api/dashboard">Emergency</a>
+        <a href="settings.html"  class="section-btn" data-api="/api/dashboard">Settings</a>
+        <a href="mfa_setup.html" class="section-btn" data-api="none">Setup MFA</a>
     </div>
 </div>
 
+<div id="zta-notify-container"></div>
+
+<script src="guard.js"></script>
+<script>
+
+// =============================================
+// Mirrors resource_policy.py ROLE_ACCESS exactly
+// =============================================
+const ROLE_ACCESS = {
+    "admin":      ["/api/admin", "/api/dashboard", "/api/pharmacy", "/api/lab", "/api/doctors"],
+    "manager":    ["/api/approvals", "/api/dashboard"],
+    "doctor":     ["/api/dashboard", "/api/lab", "/api/doctors"],
+    "pharmacist": ["/api/pharmacy", "/api/dashboard"],
+    "nurse":      ["/api/dashboard"],
+    "employee":   ["/api/dashboard"]
+};
+
+// Section label → friendly name for notifications
+const SECTION_NAMES = {
+    "/api/admin":     "Accounts / Finance",
+    "/api/pharmacy":  "Pharmacy",
+    "/api/lab":       "Laboratory",
+    "/api/approvals": "Management",
+    "/api/doctors":   "Doctors",
+    "/api/dashboard": "this section"
+};
+
+function getRoleFromToken() {
+    const token = localStorage.getItem("access_token");
+    if (!token) return null;
+    try {
+        return JSON.parse(atob(token.split('.')[1])).role || null;
+    } catch(e) { return null; }
+}
+
+function hasAccess(role, api) {
+    if (api === "none") return true;   // MFA setup always allowed
+    const allowed = ROLE_ACCESS[role] || [];
+    return allowed.some(path => api.startsWith(path));
+}
+
+// =============================================
+// Intercept ALL section button clicks
+// =============================================
+document.querySelectorAll(".section-btn").forEach(function(btn) {
+    btn.addEventListener("click", function(e) {
+        const api = btn.getAttribute("data-api");
+        if (api === "none") return;  // allow freely
+
+        const role = getRoleFromToken();
+
+        if (!role) {
+            e.preventDefault();
+            window.location.href = "login.html";
+            return;
+        }
+
+        if (!hasAccess(role, api)) {
+            e.preventDefault();
+            const sectionName = SECTION_NAMES[api] || "this section";
+            ztaNotify(
+                `Access Denied: ${sectionName} section is not allowed for your role (${role}).`,
+                "error"
+            );
+        }
+        // else: allow navigation normally
+    });
+});
+
+// =============================================
+// Guard the dashboard itself
+// =============================================
+ztaGuard("/api/dashboard/", { redirectOnForbidden: "login.html" });
+
+</script>
 </body>
 </html>

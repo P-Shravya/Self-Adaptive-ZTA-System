@@ -11,7 +11,8 @@ from backend.behavior.metadata_collector import (
     generate_device_id,
     extract_ip_prefix
 )
-from backend.behavior.behaviorhistory_logger import log_successful_login
+from backend.behavior.behaviorhistory_logger import log_behavior_event  # FIX: renamed
+from backend.behavior.baseline_loader import load_user_baseline          # FIX: load cached baseline
 from backend.behavior.userbaseline_builder import build_user_baseline
 
 # 🔹 Security Layers
@@ -25,6 +26,11 @@ router = APIRouter()
 
 risk_engine = RiskEngine()
 stepup_engine = StepUpEngine()
+
+# FIX: Fixed sensitivity used at login time so step-up can actually fire.
+# /api/login sensitivity (0.2) multiplied against risk nearly never triggered
+# step-up. Using 1.0 means the raw risk score drives the decision directly.
+LOGIN_SENSITIVITY = 1.0
 
 
 # ==========================================
@@ -53,102 +59,110 @@ async def login(data: dict, request: Request):
     db = get_db()
     cursor = db.cursor()
 
-    # =====================================
-    # 1️⃣ VERIFY USER EXISTS
-    # =====================================
-    user = cursor.execute(
-        """
-        SELECT id, username, password_hash, role, failed_attempts
-        FROM users
-        WHERE email=?
-        """,
-        (data["email"],)
-    ).fetchone()
+    try:
+        # =====================================
+        # 1️⃣ VERIFY USER EXISTS
+        # =====================================
+        user = cursor.execute(
+            """
+            SELECT id, username, password_hash, role, failed_attempts,
+                 mfa_secret, mfa_enabled
+            FROM users
+            WHERE email=?
+            """,
+            (data["email"],)
+        ).fetchone()
 
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        if not user:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    # =====================================
-    # 2️⃣ VERIFY PASSWORD
-    # =====================================
-    if not verify_password(data["password"], user["password_hash"]):
+        # =====================================
+        # 2️⃣ VERIFY PASSWORD
+        # =====================================
+        if not verify_password(data["password"], user["password_hash"]):
 
-        # Increment failed counter
+            # Increment failed counter
+            cursor.execute(
+                "UPDATE users SET failed_attempts = failed_attempts + 1 WHERE id=?",
+                (user["id"],)
+            )
+            db.commit()
+
+            # Get updated failed count
+            updated_user = cursor.execute(
+                "SELECT failed_attempts FROM users WHERE id=?",
+                (user["id"],)
+            ).fetchone()
+
+            # FIX: renamed log_successful_login → log_behavior_event to avoid
+            # the misleading name. Same function, now named accurately.
+            failed_metadata = {
+                "user_id": user["id"],
+                "username": user["username"],
+                "timestamp": datetime.utcnow().isoformat(),
+                "hour": datetime.utcnow().hour,
+                "day_of_week": datetime.utcnow().weekday(),
+
+                "ip_address": request.client.host,
+                "ip_prefix": extract_ip_prefix(request.client.host),
+                "location_country": None,
+                "latitude": None,
+                "longitude": None,
+
+                "geo_distance_km": 0,
+                "time_diff_minutes": 0,
+
+                "device_id": generate_device_id(
+                    request.headers.get("user-agent", ""),
+                    request.client.host
+                ),
+                "device_type": None,
+                "os": None,
+                "browser": None,
+
+                "resource": request.url.path,
+                "action": "login_failed",
+
+                "session_id": None,
+                "session_duration": 0,
+
+                "vpn_detected": 0,
+                "proxy_detected": 0,
+
+                "failed_attempts": updated_user["failed_attempts"],
+
+                "typing_avg": 0,
+                "data_transfer": 0,
+                "download_volume": 0
+            }
+
+            log_behavior_event(failed_metadata)
+
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+
+        # =====================================
+        # 3️⃣ SUCCESSFUL LOGIN
+        # =====================================
+
+        # Save previous failed attempts BEFORE reset
+        previous_failed_attempts = user["failed_attempts"]
+
+        # Reset failed counter
         cursor.execute(
-            "UPDATE users SET failed_attempts = failed_attempts + 1 WHERE id=?",
+            "UPDATE users SET failed_attempts = 0 WHERE id=?",
             (user["id"],)
         )
         db.commit()
 
-        # Get updated failed count
-        updated_user = cursor.execute(
-            "SELECT failed_attempts FROM users WHERE id=?",
-            (user["id"],)
-        ).fetchone()
-
-        # Log failed attempt
-        failed_metadata = {
-            "user_id": user["id"],
-            "username": user["username"],
-            "timestamp": datetime.utcnow().isoformat(),
-            "hour": datetime.utcnow().hour,
-            "day_of_week": datetime.utcnow().weekday(),
-
-            "ip_address": request.client.host,
-            "ip_prefix": extract_ip_prefix(request.client.host),
-            "location_country": None,
-            "latitude": None,
-            "longitude": None,
-
-            "geo_distance_km": 0,
-            "time_diff_minutes": 0,
-
-            "device_id": generate_device_id(
-                request.headers.get("user-agent", ""),
-                request.client.host
-            ),
-            "device_type": None,
-            "os": None,
-            "browser": None,
-
-            "resource": request.url.path,
-            "action": "login_failed",
-
-            "session_id": None,
-            "session_duration": 0,
-
-            "vpn_detected": 0,
-            "proxy_detected": 0,
-
-            "failed_attempts": updated_user["failed_attempts"],
-
-            "typing_avg": 0,
-            "data_transfer": 0,
-            "download_volume": 0
-        }
-
-        log_successful_login(failed_metadata)
-
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    # =====================================
-    # 3️⃣ SUCCESSFUL LOGIN
-    # =====================================
-
-    # Save previous failed attempts BEFORE reset
-    previous_failed_attempts = user["failed_attempts"]
-
-    # Reset failed counter
-    cursor.execute(
-        "UPDATE users SET failed_attempts = 0 WHERE id=?",
-        (user["id"],)
-    )
-    db.commit()
+    finally:
+        # FIX: always close the DB opened at the top of the route,
+        # regardless of which branch is taken (fail, success, or exception).
+        db.close()
 
     # =====================================
     # 4️⃣ COLLECT LOGIN METADATA
     # =====================================
-    metadata = collect_login_metadata(
+    metadata = await collect_login_metadata(
         request=request,
         user_id=user["id"],
         username=user["username"]
@@ -160,12 +174,17 @@ async def login(data: dict, request: Request):
     # =====================================
     # 5️⃣ STORE LOGIN HISTORY
     # =====================================
-    log_successful_login(metadata)
+    log_behavior_event(metadata)
 
     # =====================================
-    # 6️⃣ REBUILD BASELINE
+    # 6️⃣ LOAD CACHED BASELINE (rebuild only if missing)
+    # FIX: previously called build_user_baseline() on every login, which
+    # fetched 30 rows, computed stats, and wrote to DB each time.
+    # Now we load the pre-built baseline; only rebuild when absent.
     # =====================================
-    raw_baseline = build_user_baseline(user["id"])
+    raw_baseline = load_user_baseline(user["id"])
+    if not raw_baseline:
+        raw_baseline = build_user_baseline(user["id"])
     baseline = normalize_baseline(raw_baseline)
 
     # =====================================
@@ -174,16 +193,13 @@ async def login(data: dict, request: Request):
     risk_result = risk_engine.evaluate(metadata, baseline)
     risk_score = risk_result["score"]
 
-    resource = metadata.get("resource", "/api/login")
-    resource_sensitivity = get_resource_sensitivity(resource, user["role"])
+    # FIX: use LOGIN_SENSITIVITY (1.0) instead of the resource path sensitivity
+    # (which was always 0.2 for /api/login, making step-up nearly impossible).
+    # Step-up at login is driven purely by the raw risk score.
+    action = stepup_engine.evaluate(risk_score, LOGIN_SENSITIVITY)
 
     # =====================================
-    # 8️⃣ STEP-UP DECISION
-    # =====================================
-    action = stepup_engine.evaluate(risk_score, resource_sensitivity)
-
-    # =====================================
-    # 9️⃣ HANDLE DECISIONS
+    # 8️⃣ HANDLE DECISIONS
     # =====================================
 
     if action == "block":
@@ -194,8 +210,9 @@ async def login(data: dict, request: Request):
             "sub": user["id"],
             "username": user["username"],
             "role": user["role"],
-            "monitor": True
-        })
+            "monitor": True,
+            "risk_score": risk_score
+        }, expiry_minutes=30)      # 🔥 Short session for monitored users
         return {
             "access_token": token,
             "token_type": "bearer",
@@ -204,6 +221,16 @@ async def login(data: dict, request: Request):
         }
 
     if action == "mfa":
+
+        # If user has not configured MFA yet
+        if not user["mfa_secret"] or user["mfa_enabled"] == 0:
+            return {
+                "status": "mfa_setup_required",
+                "user_id": user["id"],
+                "risk_score": risk_score
+            }
+
+        # If MFA already configured
         return {
             "status": "mfa_required",
             "methods": ["totp"],
@@ -212,14 +239,23 @@ async def login(data: dict, request: Request):
         }
 
     if action == "strong_mfa":
+
+        if not user["mfa_secret"] or user["mfa_enabled"] == 0:
+            return {
+                "status": "mfa_setup_required",
+                "user_id": user["id"],
+                "risk_score": risk_score
+            }
+
         return {
             "status": "strong_mfa_required",
-            "methods": ["totp", "webauthn"],
+            "methods": ["webauthn"],
             "user_id": user["id"],
             "risk_score": risk_score
         }
 
     if action == "manager_approval":
+        resource = metadata.get("resource", "/api/login")
         create_approval_request(
             user_id=user["id"],
             resource=resource,
@@ -234,7 +270,8 @@ async def login(data: dict, request: Request):
     token = create_token({
         "sub": user["id"],
         "username": user["username"],
-        "role": user["role"]
+        "role": user["role"],
+        "risk_score": risk_score
     })
 
     return {

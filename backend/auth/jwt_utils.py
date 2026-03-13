@@ -1,31 +1,36 @@
 # backend/auth/jwt_utils.py
 
 from jose import jwt, JWTError, ExpiredSignatureError
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from backend.config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
 
 
 # ==========================================================
 # 🔹 CREATE ACCESS TOKEN
 # ==========================================================
-def create_token(data: dict) -> str:
-    """
-    Creates JWT access token with:
-        - issued at (iat)
-        - expiration (exp)
-    """
+def create_token(data: dict, expiry_minutes: int = None) -> str:
 
     payload = data.copy()
+    now = datetime.now(timezone.utc)
 
-    now = datetime.utcnow()
+    # jose enforces JWT spec: "sub" should be a string
+    if "sub" in payload and payload["sub"] is not None and not isinstance(payload["sub"], str):
+        payload["sub"] = str(payload["sub"])
+
+    # If custom expiry not provided → use default
+    if expiry_minutes is None:
+        expiry_minutes = ACCESS_TOKEN_EXPIRE_MINUTES
+
+    # Use numeric timestamps for JWT standard claims
+    iat = int(now.timestamp())
+    exp = int((now + timedelta(minutes=expiry_minutes)).timestamp())
 
     payload.update({
-        "iat": now,
-        "exp": now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        "iat": iat,
+        "exp": exp
     })
 
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
-
 
 # ==========================================================
 # 🔹 VERIFY & DECODE TOKEN

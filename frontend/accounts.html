@@ -1,16 +1,26 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Accounts Section</title>
+    <title>Accounts / Finance Section</title>  <!-- FIX: was "Accounts Section" but body said "Doctors Section" -->
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
 <div class="dashboard">
-    <h2>Doctors Section</h2>
-    <p>Manage doctor records and schedules.</p>
+    <h2>Accounts / Finance Section</h2>  <!-- FIX: was incorrectly showing "Doctors Section" -->
+    <p>Manage financial records and accounts.</p>
     <a href="dashboard.html">⬅ Back to Dashboard</a>
 </div>
+
+<div id="zta-notify-container"></div>
+
+<script src="guard.js"></script>
+<script src="zta_notify.js"></script>
+<script>
+// FIX: was guarding /api/admin/dashboard which does not exist as a router path.
+// The correct path is /api/admin (matches admin_router.py prefix).
+ztaGuard("/api/admin", { redirectOnForbidden: "dashboard.html" });
+</script>
 
 </body>
 </html>

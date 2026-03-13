@@ -124,6 +124,11 @@ button:hover {
     <!-- Cards will be inserted here -->
 </div>
 
+<div id="zta-notify-container"></div>
+
+<script src="guard.js"></script>
+<script src="zta_notify.js"></script>
+
 <script>
 
 const token = localStorage.getItem("access_token");
@@ -204,9 +209,14 @@ async function reject(id) {
     loadApprovals();
 }
 
-loadApprovals();
+// Ensure user is allowed to access manager approvals.
+async function bootstrap(){
+    await ztaGuard("/api/approvals/pending", { redirectOnForbidden: "dashboard.html" });
+    loadApprovals();
+}
+
+bootstrap();
 
 </script>
-
 </body>
 </html>

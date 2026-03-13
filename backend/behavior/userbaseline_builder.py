@@ -28,6 +28,7 @@ def build_user_baseline(user_id: int):
             download_volume
         FROM behavior_logs
         WHERE user_id = ?
+        AND action = 'login_success'
         ORDER BY timestamp DESC
         LIMIT 30
     """, (user_id,)).fetchall()

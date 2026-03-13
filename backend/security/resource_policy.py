@@ -1,11 +1,18 @@
 RESOURCE_SENSITIVITY = {
     "/api/login": 0.2,
-    "/api/dashboard": 0.4,
+    "/api/dashboard": 0.5,
     "/api/profile": 0.3,
     "/api/reports": 0.6,
     "/api/finance": 0.8,
     "/api/payroll": 0.9,
-    "/api/admin": 0.95
+    "/api/admin": 0.95,
+
+    # Section APIs (these are real routers in your app)
+    # Setting these lets StepUpEngine trigger on section access, not only admin.
+    "/api/pharmacy": 0.7,
+    "/api/lab": 0.75,
+    "/api/approvals": 0.85,
+    "/api/doctors": 0.6
 }
 
 ROLE_MULTIPLIER = {
@@ -26,15 +33,17 @@ ROLE_ACCESS = {
         "/api/admin",
         "/api/dashboard",
         "/api/pharmacy",
-        "/api/lab"
+        "/api/lab",
+        "/api/doctors"       # admin can access doctors section
     ],
     "manager": [
-        "/api/approvals",   # ONLY manager has this
+        "/api/approvals",    # ONLY manager has this
         "/api/dashboard"
     ],
     "doctor": [
         "/api/dashboard",
-        "/api/lab"
+        "/api/lab",
+        "/api/doctors"       # doctor can access doctors section
     ],
     "pharmacist": [
         "/api/pharmacy",

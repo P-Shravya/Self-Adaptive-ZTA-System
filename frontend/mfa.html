@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>MFA Verification</title>
+<link rel="stylesheet" href="style.css">
+</head>
+
+<body class="login-body">
+
+<div class="login-container">
+
+<h2>Enter OTP</h2>
+
+<div style="position:absolute; top:16px; right:16px;">
+    <button onclick="goToSetup()">Setup MFA</button>
+</div>
+
+<input type="text" id="otp" placeholder="Enter OTP">
+
+<button onclick="verifyOTP()">Verify</button>
+
+<p id="msg"></p>
+
+</div>
+
+<script>
+
+function getUserId() {
+    const token = localStorage.getItem("access_token");
+    if (token) {
+        try {
+            const payload = JSON.parse(atob(token.split('.')[1]));
+            if (payload && payload.sub != null) return parseInt(payload.sub, 10);
+        } catch(e) {}
+    }
+    const mfaUser = localStorage.getItem("mfa_user");
+    if (mfaUser) return parseInt(mfaUser, 10);
+    return null;
+}
+
+function getRiskScore() {
+    // FIX: read risk_score from the stored login response so it can be
+    // forwarded to /mfa/verify and preserved in the post-MFA JWT.
+    const stored = localStorage.getItem("login_risk_score");
+    return stored ? parseFloat(stored) : 0;
+}
+
+async function verifyOTP(){
+
+    const otp = document.getElementById("otp").value;
+    const user_id = getUserId();
+
+    if (!user_id) {
+        document.getElementById("msg").innerText = "Session expired. Please login again.";
+        window.location.href = "login.html";
+        return;
+    }
+
+    // FIX: use relative URL instead of hardcoded http://127.0.0.1:8000/mfa/verify
+    // which breaks in any non-localhost deployment.
+    const response = await fetch("/mfa/verify", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            user_id: user_id,
+            otp: otp,
+            risk_score: getRiskScore()   // FIX: pass risk_score so post-MFA token preserves it
+        })
+    });
+
+    const data = await response.json();
+
+    if(data.access_token){
+
+        localStorage.setItem("access_token", data.access_token);
+        localStorage.removeItem("login_risk_score");
+
+        const redirectTo = localStorage.getItem("post_auth_redirect") || "dashboard.html";
+        localStorage.removeItem("post_auth_redirect");
+        window.location.href = redirectTo;
+
+    } else {
+
+        document.getElementById("msg").innerText = data.detail || "Invalid OTP";
+
+    }
+
+}
+
+function goToSetup(){
+    window.location.href = "mfa_setup.html";
+}
+
+</script>
+
+<div id="zta-notify-container"></div>
+
+<script src="zta_notify.js"></script>
+</body>
+</html>

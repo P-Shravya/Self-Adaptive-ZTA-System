@@ -7,6 +7,8 @@ pydantic>=2.5.0
 pyotp
 qrcode
 webauthn
-requests
+httpx
 geopy
 user-agents
+pillow
+python-dotenv

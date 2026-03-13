@@ -1,9 +1,14 @@
 # backend/risk_engine/identity_risk.py
 
-from backend.database import get_db
 
-
-def calculate_identity_risk(meta: dict, baseline: dict):
+def calculate_identity_risk(meta: dict, baseline: dict, db=None):
+    """
+    FIX: `db` is now an optional parameter.
+    Callers (e.g. risk_engine.py) should pass the already-open DB connection
+    so this function does not open its own. This eliminates the 3-concurrent-
+    connections-per-login problem (auth_router + metadata_collector + identity_risk).
+    If db is None we open one as a fallback for backward compatibility.
+    """
 
     risk = 0
     flags = []
@@ -33,12 +38,8 @@ def calculate_identity_risk(meta: dict, baseline: dict):
     attempts = meta.get("failed_attempts", 0)
 
     if attempts > 0:
-        # Controlled exponential growth
         penalty = 10 * (2 ** (attempts - 1))
-
-        # Cap exponential part
         penalty = min(penalty, 60)
-
         risk += penalty
 
         if attempts > 5:
@@ -50,9 +51,16 @@ def calculate_identity_risk(meta: dict, baseline: dict):
 
     # ==========================================
     # 4️⃣ CONTINUOUS FAILURE PATTERN
+    # FIX: use the passed-in db connection when available to avoid opening
+    # a new SQLite connection per risk evaluation call.
     # ==========================================
+    _owns_db = False
     try:
-        db = get_db()
+        if db is None:
+            from backend.database import get_db
+            db = get_db()
+            _owns_db = True
+
         recent_logs = db.execute("""
             SELECT action
             FROM behavior_logs
@@ -60,7 +68,6 @@ def calculate_identity_risk(meta: dict, baseline: dict):
             ORDER BY timestamp DESC
             LIMIT 5
         """, (meta.get("user_id"),)).fetchall()
-        db.close()
 
         recent_failed = sum(
             1 for r in recent_logs if r["action"] == "login_failed"
@@ -72,6 +79,9 @@ def calculate_identity_risk(meta: dict, baseline: dict):
 
     except Exception:
         pass
+    finally:
+        if _owns_db and db:
+            db.close()
 
     # ==========================================
     # 5️⃣ LOGIN TIME ANOMALY (Z-Score)
@@ -81,9 +91,10 @@ def calculate_identity_risk(meta: dict, baseline: dict):
     login_hour = meta.get("login_hour")
 
     if avg_hour is not None and login_hour is not None:
-
-        if std_dev == 0:
-            std_dev = 1
+        # FIX: clamp std_dev to a minimum of 1.0 so the Z-score cannot
+        # explode when the baseline has very little variance (e.g. a user
+        # who always logs in at exactly the same hour gives std_dev ≈ 0).
+        std_dev = max(float(std_dev), 1.0)
 
         z = abs(login_hour - avg_hour) / std_dev
 
