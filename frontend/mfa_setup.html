@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Setup MFA</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="login-body">
+
+<div class="login-container">
+    <h2>Setup MFA</h2>
+
+    <p id="msg"></p>
+
+    <button onclick="generateQR()">Generate QR</button>
+
+    <div style="margin-top: 12px;">
+        <img id="qrImage" style="max-width: 240px; display:none;">
+    </div>
+
+    <div style="margin-top: 14px;">
+        <button id="continueBtn" onclick="goToOtp()" style="display:none;">Continue to OTP Verification</button>
+    </div>
+</div>
+
+<script>
+function getUserIdForSetup(){
+    // If user is already logged in, use the JWT.
+    const token = localStorage.getItem("access_token");
+    if(token){
+        try{
+            const payload = JSON.parse(atob(token.split('.')[1]));
+            if(payload && payload.sub != null) return payload.sub;
+        }catch(e){}
+    }
+    // If user was redirected here due to mfa_setup_required, login stored mfa_user.
+    const mfaUser = localStorage.getItem("mfa_user");
+    if(mfaUser) return parseInt(mfaUser,10);
+    return null;
+}
+
+async function generateQR(){
+    const user_id = getUserIdForSetup();
+    if(!user_id){
+        document.getElementById("msg").innerText = "No user found for MFA setup. Please login again.";
+        return;
+    }
+
+    const res = await fetch("http://127.0.0.1:8000/mfa/setup",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({user_id:user_id})
+    });
+
+    const data = await res.json();
+
+    if(data.qr_code_base64){
+        const img = document.getElementById("qrImage");
+        img.src = "data:image/png;base64," + data.qr_code_base64;
+        img.style.display = "block";
+        document.getElementById("continueBtn").style.display = "inline-block";
+        document.getElementById("msg").innerText = "Scan this QR in your authenticator app, then continue to OTP verification.";
+    }else{
+        document.getElementById("msg").innerText = "Failed to generate QR code.";
+    }
+}
+
+function goToOtp(){
+    window.location.href = "mfa.html";
+}
+</script>
+
+<div id="zta-notify-container"></div>
+<script src="zta_notify.js"></script>
+</body>
+</html>

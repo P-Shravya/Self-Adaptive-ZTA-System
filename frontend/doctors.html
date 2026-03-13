@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Doctors Section</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="dashboard">
+    <h2>Doctors Section</h2>
+    <p>Manage doctor records and schedules.</p>
+    <a href="dashboard.html">⬅ Back to Dashboard</a>
+</div>
+
+<div id="zta-notify-container"></div>
+
+<script src="guard.js"></script>
+<script src="zta_notify.js"></script>
+<script>
+// Doctors section is mapped to dashboard access in backend policy
+ztaGuard("/api/doctors/", { redirectOnForbidden: "dashboard.html" });
+</script>
+</body>
+</html>

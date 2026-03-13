@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ZTA Login</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="zta_notify.js"></script>
+</head>
+<body class="login-body">
+
+<div class="login-container">
+    <h2>ZTA Secure Login</h2>
+
+    <form id="loginForm">
+        <label>Email</label>
+        <input type="email" id="email" required>
+
+        <label>Password</label>
+        <input type="password" id="password" required>
+
+        <button type="submit" id="loginBtn">Login</button>
+    </form>
+
+    <p id="message"></p>
+</div>
+<div id="zta-notify-container"></div>
+
+<script>
+
+let isSubmitting = false;
+
+document.getElementById("loginForm").onsubmit = async function(e) {
+
+    e.preventDefault();
+
+    if (isSubmitting) return;
+    isSubmitting = true;
+    document.getElementById("loginBtn").disabled = true;
+
+    const email = document.getElementById("email").value;
+    const password = document.getElementById("password").value;
+
+    ztaNotify("Sending login request to server...", "success");
+
+    let data = null;
+
+    try {
+
+        const response = await fetch("/api/login", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ email, password })
+        });
+
+        data = await response.json();
+
+        if (!response.ok && !data.status) {
+            throw new Error(data.detail || "Server returned " + response.status);
+        }
+
+    } catch (error) {
+
+        console.error(error);
+
+        ztaNotify("Backend connection failed: " + error.message, "error");
+
+        isSubmitting = false;
+        document.getElementById("loginBtn").disabled = false;
+        return;
+    }
+
+    // ==========================
+    // NORMAL LOGIN SUCCESS
+    // ==========================
+
+    if (data.access_token) {
+
+        ztaNotify("Login successful. Access granted.", "success");
+
+        ztaNotify("Credentials verified by backend", "success");
+        ztaNotify("Collecting behavioral metadata...", "success");
+        ztaNotify("Evaluating risk score using ZTA engine...", "success");
+
+        localStorage.setItem("access_token", data.access_token);
+
+        window.location.href = "dashboard.html";
+        return;
+    }
+
+    // ==========================
+    // MFA REQUIRED
+    // ==========================
+
+    if (data.status === "mfa_required") {
+
+        localStorage.setItem("mfa_user", data.user_id);
+        localStorage.setItem("login_risk_score", data.risk_score || 0);
+
+        ztaNotify("Risk detected. MFA verification required", "warning");
+
+        window.location.href = "mfa.html";
+        return;
+    }
+
+    // ==========================
+    //  MFA_SETUP REQUIRED
+    // ==========================
+
+    if (data.status === "mfa_setup_required") {
+
+        localStorage.setItem("mfa_user", data.user_id);
+        localStorage.setItem("login_risk_score", data.risk_score || 0);
+
+        ztaNotify("MFA setup required. Please scan authenticator.", "warning");
+
+        window.location.href = "mfa_setup.html";
+        return;
+    }
+
+
+    // ==========================
+    // STRONG MFA REQUIRED
+    // ==========================
+
+    if (data.status === "strong_mfa_required") {
+
+        localStorage.setItem("mfa_user", data.user_id);
+        localStorage.setItem("login_risk_score", data.risk_score || 0);
+
+        ztaNotify("High risk detected. WebAuthn authentication required", "warning");
+
+        window.location.href = "webauthn.html";
+        return;
+    }
+
+    // ==========================
+    // MANAGER APPROVAL REQUIRED
+    // ==========================
+
+    if (data.status === "manager_approval_required") {
+
+        ztaNotify("Critical risk detected. Manager approval required", "error");
+
+        window.location.href = "approval_wait.html";
+        return;
+    }
+
+    // ==========================
+    // LOGIN FAILURE
+    // ==========================
+
+    ztaNotify("Login failed: Invalid credentials", "error");
+
+    document.getElementById("message").innerText =
+        data.detail || "Invalid credentials";
+
+    isSubmitting = false;
+    document.getElementById("loginBtn").disabled = false;
+
+};
+
+</script>
+
+</body>
+</html>
