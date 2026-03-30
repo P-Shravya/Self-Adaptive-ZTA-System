@@ -3,7 +3,7 @@
 from fastapi.responses import JSONResponse
 from fastapi import Request, HTTPException
 
-from backend.auth.jwt_utils import verify_token
+from backend.auth.jwt_utils import verify_token, create_token
 from backend.risk_engine.risk_engine import RiskEngine
 
 from backend.behavior.baseline_loader import load_user_baseline
@@ -12,8 +12,22 @@ from backend.behavior.behaviorhistory_logger import log_behavior_event   # FIX: 
 
 from backend.security.resource_policy import has_access
 from backend.approval.approval_utils import create_approval_request
+from backend.database import get_db
 
 risk_engine = RiskEngine()
+
+
+def build_pending_mfa_token(user_id, username, role, risk_score: float) -> str:
+    return create_token(
+        {
+            "sub": user_id,
+            "username": username,
+            "role": role,
+            "risk_score": float(risk_score),
+            "mfa_pending": True
+        },
+        expiry_minutes=60
+    )
 
 
 async def monitor_middleware(request: Request, call_next):
@@ -28,14 +42,27 @@ async def monitor_middleware(request: Request, call_next):
     """
 
     auth_header = request.headers.get("Authorization")
+    path = request.url.path
 
-    if auth_header and auth_header.startswith("Bearer "):
+    if auth_header:
+        hs = auth_header.strip()
+        token = None
+        if hs.lower().startswith("bearer "):
+            token = hs[7:].strip() or None
+        if token:
+            payload = verify_token(token)
+        else:
+            payload = None
 
-        token = auth_header.split(" ")[1]
-        payload = verify_token(token)
+    if auth_header and token:
+
+        # MFA routes are not listed in ROLE_ACCESS. Any valid JWT (pending MFA
+        # step-up or normal session) may call /mfa/*; binding is enforced in
+        # mfa_router (sub must match user_id).
+        if payload and path.startswith("/mfa/"):
+            return await call_next(request)
 
         if payload:
-
             user_id = payload.get("sub")
             username = payload.get("username")
             role = payload.get("role")
@@ -43,8 +70,6 @@ async def monitor_middleware(request: Request, call_next):
             # =========================================
             # 1️⃣ RBAC ENFORCEMENT (Always apply)
             # =========================================
-
-            path = request.url.path
 
             if not has_access(role, path):
                 raise HTTPException(
@@ -112,13 +137,37 @@ async def monitor_middleware(request: Request, call_next):
 
                     # Level 1 escalation: MFA
                     if 56 <= risk_score <= 70:
+                        # If user hasn't enrolled MFA yet, return
+                        # mfa_setup_required so frontend shows OTP page with a
+                        # "Setup MFA" CTA.
+                        enrolled_mfa = False
+                        try:
+                            conn = get_db()
+                            cursor = conn.cursor()
+                            cursor.execute(
+                                "SELECT mfa_secret, mfa_enabled FROM users WHERE id=?",
+                                (user_id,)
+                            )
+                            row = cursor.fetchone()
+                            conn.close()
+                            enrolled_mfa = bool(row["mfa_secret"]) and int(row["mfa_enabled"] or 0) == 1
+                        except Exception:
+                            enrolled_mfa = False
+
+                        status = "mfa_required" if enrolled_mfa else "mfa_setup_required"
                         return JSONResponse(
                             status_code=401,
                             content={"detail": {
-                                "status": "mfa_required",
+                                "status": status,
                                 "methods": ["totp"],
                                 "user_id": user_id,
-                                "risk_score": risk_score
+                                "risk_score": risk_score,
+                                "pending_mfa_token": build_pending_mfa_token(
+                                    user_id=user_id,
+                                    username=username,
+                                    role=role,
+                                    risk_score=risk_score
+                                )
                             }}
                         )
 

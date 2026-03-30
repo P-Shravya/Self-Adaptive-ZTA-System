@@ -44,10 +44,21 @@ async function ztaGuard(resourceApiPath, options) {
     if (detail.user_id != null) {
       localStorage.setItem("mfa_user", detail.user_id);
     }
+    if (detail.risk_score != null) {
+      localStorage.setItem("login_risk_score", detail.risk_score);
+    }
+    if (detail.pending_mfa_token) {
+      localStorage.setItem("pending_mfa_token", detail.pending_mfa_token);
+    }
 
     if (detail.status === "mfa_setup_required") {
-      if (typeof ztaNotify === "function") ztaNotify("MFA setup required. Please scan authenticator.", "warning");
-      window.location.href = "mfa_setup.html";
+      // UX requirement: land on the OTP page first, but show the setup CTA
+      // so the user can switch to QR setup without losing the step-up flow.
+      localStorage.setItem("mfa_setup_required", "1");
+      if (typeof ztaNotify === "function") {
+        ztaNotify("You haven't setup mfa please set up mfa.", "warning");
+      }
+      window.location.href = "mfa.html";
       return null;
     }
 

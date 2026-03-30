@@ -32,6 +32,18 @@ stepup_engine = StepUpEngine()
 # step-up. Using 1.0 means the raw risk score drives the decision directly.
 LOGIN_SENSITIVITY = 1.0
 
+def build_pending_mfa_token(user_id: int, username: str, role: str, risk_score: float) -> str:
+    return create_token(
+        {
+            "sub": user_id,
+            "username": username,
+            "role": role,
+            "risk_score": float(risk_score),
+            "mfa_pending": True
+        },
+        expiry_minutes=60
+    )
+
 
 # ==========================================
 # 🔹 Baseline Normalization
@@ -227,7 +239,13 @@ async def login(data: dict, request: Request):
             return {
                 "status": "mfa_setup_required",
                 "user_id": user["id"],
-                "risk_score": risk_score
+                "risk_score": risk_score,
+                "pending_mfa_token": build_pending_mfa_token(
+                    user_id=user["id"],
+                    username=user["username"],
+                    role=user["role"],
+                    risk_score=risk_score
+                )
             }
 
         # If MFA already configured
@@ -235,7 +253,13 @@ async def login(data: dict, request: Request):
             "status": "mfa_required",
             "methods": ["totp"],
             "user_id": user["id"],
-            "risk_score": risk_score
+            "risk_score": risk_score,
+            "pending_mfa_token": build_pending_mfa_token(
+                user_id=user["id"],
+                username=user["username"],
+                role=user["role"],
+                risk_score=risk_score
+            )
         }
 
     if action == "strong_mfa":
@@ -244,7 +268,13 @@ async def login(data: dict, request: Request):
             return {
                 "status": "mfa_setup_required",
                 "user_id": user["id"],
-                "risk_score": risk_score
+                "risk_score": risk_score,
+                "pending_mfa_token": build_pending_mfa_token(
+                    user_id=user["id"],
+                    username=user["username"],
+                    role=user["role"],
+                    risk_score=risk_score
+                )
             }
 
         return {
