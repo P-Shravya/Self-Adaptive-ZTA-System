@@ -8,12 +8,13 @@ class StepUpEngine:
         Final enforcement decision based on:
             effective_score = risk_score × resource_sensitivity
 
-        Range model:
-            0   ≤ score ≤ 30  → allow
-            31  ≤ score ≤ 55  → monitor
-            56  ≤ score ≤ 70  → mfa
-            71  ≤ score ≤ 85  → strong_mfa (or manager approval)
-            score > 85        → block
+        Range model (continuous; avoids gaps like 85.1 falling through):
+            score ≤ 30        → allow
+            31–55             → monitor
+            56–70             → mfa
+            71–85.x           → strong_mfa (everything below 86)
+            86–95             → manager_approval
+            score > 95        → block
         """
 
         # ------------------------------------------
@@ -28,26 +29,20 @@ class StepUpEngine:
         # 2️⃣ Decision Based on Effective Score
         # ------------------------------------------
 
-        # 🟢 0 ≤ score ≤ 30 → Allow
-        if 0 <= effective_score <= 30:
+        if effective_score <= 30:
             return "allow"
 
-        # 🟡 31 ≤ score ≤ 55 → Monitor
-        if 31 <= effective_score <= 55:
+        if effective_score <= 55:
             return "monitor"
 
-        # 🟠 56 ≤ score ≤ 70 → Soft MFA
-        if 56 <= effective_score <= 70:
+        if effective_score <= 70:
             return "mfa"
 
-        # 🔵 71 ≤ score ≤ 85 → Strong MFA or Approval
-        if 71 <= effective_score <= 85:
-
-            # High sensitivity resource escalation
-            if resource_sensitivity >= 0.8:
-                return "manager_approval"
-
+        # Strong MFA for high-but-not-critical scores (includes e.g. 85.12)
+        if effective_score < 86:
             return "strong_mfa"
 
-        # 🔴 score > 85 → Block
+        if effective_score <= 95:
+            return "manager_approval"
+
         return "block"

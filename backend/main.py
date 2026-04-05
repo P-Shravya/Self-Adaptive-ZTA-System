@@ -14,7 +14,7 @@ from backend.routers.dashboard_router import router as dashboard_router
 from backend.routers.pharmacy_router import router as pharmacy_router
 from backend.routers.lab_router import router as lab_router
 from backend.mfa.mfa_router import router as mfa_router
-from backend.webauthn.webauthn_router import router as webauthn_router
+from backend.biometric.biometric_router import router as biometric_router
 
 
 
@@ -51,7 +51,7 @@ app.include_router(dashboard_router)
 app.include_router(pharmacy_router)
 app.include_router(lab_router)
 app.include_router(mfa_router)
-app.include_router(webauthn_router)
+app.include_router(biometric_router)
 
 # Serve frontend static files (HTML, CSS, JS) under /frontend
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"

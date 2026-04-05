@@ -3,125 +3,17 @@
 <head>
 <meta charset="UTF-8">
 <title>Manager Approval Dashboard</title>
-
-<style>
-
-/* ===== GLOBAL ===== */
-body {
-    font-family: Arial, sans-serif;
-    background-color: #f4f6f9;
-    margin: 0;
-    padding: 20px;
-}
-
-h2 {
-    text-align: center;
-    margin-bottom: 30px;
-}
-
-/* ===== CONTAINER ===== */
-.approval-container {
-    max-width: 900px;
-    margin: auto;
-}
-
-/* ===== APPROVAL CARD ===== */
-.approval-card {
-    background: white;
-    border-radius: 12px;
-    padding: 20px;
-    margin-bottom: 20px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-    transition: 0.3s ease;
-}
-
-.approval-card:hover {
-    transform: translateY(-3px);
-}
-
-/* ===== CARD HEADER ===== */
-.card-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 15px;
-}
-
-.user-name {
-    font-size: 18px;
-    font-weight: bold;
-}
-
-.risk-badge {
-    padding: 6px 12px;
-    border-radius: 20px;
-    color: white;
-    font-weight: bold;
-}
-
-.low-risk { background: #2ecc71; }
-.medium-risk { background: #f39c12; }
-.high-risk { background: #e74c3c; }
-
-/* ===== DETAILS GRID ===== */
-.details-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-    font-size: 14px;
-    margin-bottom: 15px;
-}
-
-.details-grid div {
-    background: #f8f9fc;
-    padding: 8px;
-    border-radius: 6px;
-}
-
-/* ===== ACTION BUTTONS ===== */
-.action-buttons {
-    display: flex;
-    gap: 10px;
-}
-
-button {
-    padding: 8px 15px;
-    border: none;
-    border-radius: 6px;
-    cursor: pointer;
-    font-weight: bold;
-}
-
-.approve-btn {
-    background-color: #27ae60;
-    color: white;
-}
-
-.reject-btn {
-    background-color: #c0392b;
-    color: white;
-}
-
-button:hover {
-    opacity: 0.85;
-}
-
-.no-requests {
-    text-align: center;
-    padding: 40px;
-    color: gray;
-    font-size: 16px;
-}
-
-</style>
+<link rel="stylesheet" href="style.css?v=2">
 </head>
 
-<body>
+<body class="app-body">
 
+<div class="dashboard">
 <h2>Pending Approval Requests</h2>
 
 <div class="approval-container" id="approvalContainer">
     <!-- Cards will be inserted here -->
+</div>
 </div>
 
 <div id="zta-notify-container"></div>
@@ -190,22 +82,42 @@ async function loadApprovals() {
 }
 
 async function approve(id) {
-    await fetch(`/api/approvals/${id}/approve`, {
+    const res = await fetch(`/api/approvals/${id}/approve`, {
         method: "POST",
         headers: {
             "Authorization": "Bearer " + token
         }
     });
+    if (res.ok) {
+        if (typeof ztaNotify === "function") ztaNotify("Request approved.", "success");
+    } else {
+        let msg = "Approve failed";
+        try {
+            const err = await res.json();
+            msg = err.detail || msg;
+        } catch (e) {}
+        if (typeof ztaNotify === "function") ztaNotify(msg, "error");
+    }
     loadApprovals();
 }
 
 async function reject(id) {
-    await fetch(`/api/approvals/${id}/reject`, {
+    const res = await fetch(`/api/approvals/${id}/reject`, {
         method: "POST",
         headers: {
             "Authorization": "Bearer " + token
         }
     });
+    if (res.ok) {
+        if (typeof ztaNotify === "function") ztaNotify("Request rejected.", "warning");
+    } else {
+        let msg = "Reject failed";
+        try {
+            const err = await res.json();
+            msg = err.detail || msg;
+        } catch (e) {}
+        if (typeof ztaNotify === "function") ztaNotify(msg, "error");
+    }
     loadApprovals();
 }
 

@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 from backend.database import get_db
+from backend.auth.jwt_utils import create_token
 from backend.approval.approval_utils import (
     approve_request,
     reject_request
@@ -102,32 +103,57 @@ def get_approval_status(user=Depends(get_current_user)):
     db = get_db()
     cursor = db.cursor()
 
-    # Check if still pending
-    pending = cursor.execute("""
-        SELECT requested_at FROM approval_requests
-        WHERE user_id=?
-        ORDER BY requested_at DESC LIMIT 1
-    """, (user["sub"],)).fetchone()
+    try:
+        user_id = int(user["sub"])
 
-    if pending:
-        from datetime import datetime, timedelta
-        age = datetime.utcnow() - datetime.fromisoformat(pending["requested_at"])
-        if age > timedelta(minutes=60):
-            db.close()
-            return {"status": "expired"}
+        pending = cursor.execute("""
+            SELECT requested_at FROM approval_requests
+            WHERE user_id=?
+            ORDER BY requested_at DESC LIMIT 1
+        """, (user_id,)).fetchone()
+
+        if pending:
+            from datetime import datetime, timedelta
+
+            age = datetime.utcnow() - datetime.fromisoformat(pending["requested_at"])
+            if age > timedelta(minutes=60):
+                return {"status": "expired"}
+
+            return {"status": "pending"}
+
+        log = cursor.execute("""
+            SELECT decision FROM approval_logs
+            WHERE user_id=?
+            ORDER BY decided_at DESC LIMIT 1
+        """, (user_id,)).fetchone()
+
+        if not log:
+            return {"status": "pending"}
+
+        decision = str(log["decision"])
+        if decision != "approved":
+            return {"status": decision}
+
+        urow = cursor.execute(
+            "SELECT username, role FROM users WHERE id=?",
+            (user_id,),
+        ).fetchone()
+        if not urow:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        risk = float(user.get("risk_score", 0) or 0)
+        new_token = create_token(
+            {
+                "sub": user_id,
+                "username": urow["username"],
+                "role": urow["role"],
+                "risk_score": risk,
+            }
+        )
+        return {
+            "status": "approved",
+            "access_token": new_token,
+            "token_type": "bearer",
+        }
+    finally:
         db.close()
-        return {"status": "pending"}
-
-    # Check if approved/rejected in logs
-    log = cursor.execute("""
-        SELECT decision FROM approval_logs
-        WHERE user_id=?
-        ORDER BY decided_at DESC LIMIT 1
-    """, (user["sub"],)).fetchone()
-
-    db.close()
-
-    if log:
-        return {"status": log["decision"]}  # "approved" or "rejected"
-
-    return {"status": "pending"}

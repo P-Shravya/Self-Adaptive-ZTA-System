@@ -3,7 +3,7 @@
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-from backend.auth.jwt_utils import verify_token
+from backend.auth.jwt_utils import verify_token, create_token
 
 from backend.security.resource_policy import has_access, get_resource_sensitivity
 from backend.security.stepup_engine import StepUpEngine
@@ -21,6 +21,19 @@ stepup_engine = StepUpEngine()
 # point we've already returned 403 via has_access(), so it never actually
 # runs with full sensitivity in practice anyway.
 PERMITTED_ROLE_SENSITIVITY = 0.3
+
+
+def build_pending_mfa_token(user: dict) -> str:
+    return create_token(
+        {
+            "sub": user.get("sub"),
+            "username": user.get("username"),
+            "role": user.get("role"),
+            "risk_score": float(user.get("risk_score", 0) or 0),
+            "mfa_pending": True
+        },
+        expiry_minutes=60
+    )
 
 
 # ==========================================
@@ -83,18 +96,18 @@ def require_role_access(resource: str):
                 conn = get_db()
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT mfa_secret, mfa_enabled, webauthn_credential_id FROM users WHERE id=?",
+                    "SELECT mfa_secret, mfa_enabled, biometric_credential_id FROM users WHERE id=?",
                     (user_id,)
                 )
                 row = cursor.fetchone()
                 conn.close()
                 if row:
                     enrolled_mfa = bool(row["mfa_secret"]) and int(row["mfa_enabled"] or 0) == 1
-                    has_webauthn = row["webauthn_credential_id"] is not None
+                    has_biometric = row["biometric_credential_id"] is not None
                 else:
-                    has_webauthn = False
+                    has_biometric = False
             except Exception:
-                has_webauthn = False
+                has_biometric = False
 
             if action == "block":
                 raise HTTPException(status_code=403, detail="High risk request blocked.")
@@ -116,10 +129,12 @@ def require_role_access(resource: str):
                     status_code=401,
                     detail={
                         "status": "strong_mfa_required",
-                        "methods": ["webauthn"],
+                        "methods": ["biometric", "email_otp"],
+                        "message": "Strong MFA required. Risk score is high.",
                         "user_id": user_id,
                         "risk_score": float(risk_score),
-                        "resource": resource
+                        "resource": resource,
+                        "pending_mfa_token": build_pending_mfa_token(user)
                     }
                 )
 
@@ -131,7 +146,8 @@ def require_role_access(resource: str):
                         "status": "mfa_setup_required",
                         "user_id": user_id,
                         "risk_score": float(risk_score),
-                        "resource": resource
+                        "resource": resource,
+                        "pending_mfa_token": build_pending_mfa_token(user)
                     }
                 )
 
@@ -142,7 +158,8 @@ def require_role_access(resource: str):
                     "methods": ["totp"],
                     "user_id": user_id,
                     "risk_score": float(risk_score),
-                    "resource": resource
+                    "resource": resource,
+                    "pending_mfa_token": build_pending_mfa_token(user)
                 }
             )
 

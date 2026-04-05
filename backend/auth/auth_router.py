@@ -32,6 +32,18 @@ stepup_engine = StepUpEngine()
 # step-up. Using 1.0 means the raw risk score drives the decision directly.
 LOGIN_SENSITIVITY = 1.0
 
+def build_pending_mfa_token(user_id: int, username: str, role: str, risk_score: float) -> str:
+    return create_token(
+        {
+            "sub": user_id,
+            "username": username,
+            "role": role,
+            "risk_score": float(risk_score),
+            "mfa_pending": True
+        },
+        expiry_minutes=60
+    )
+
 
 # ==========================================
 # 🔹 Baseline Normalization
@@ -227,7 +239,13 @@ async def login(data: dict, request: Request):
             return {
                 "status": "mfa_setup_required",
                 "user_id": user["id"],
-                "risk_score": risk_score
+                "risk_score": risk_score,
+                "pending_mfa_token": build_pending_mfa_token(
+                    user_id=user["id"],
+                    username=user["username"],
+                    role=user["role"],
+                    risk_score=risk_score
+                )
             }
 
         # If MFA already configured
@@ -235,23 +253,28 @@ async def login(data: dict, request: Request):
             "status": "mfa_required",
             "methods": ["totp"],
             "user_id": user["id"],
-            "risk_score": risk_score
+            "risk_score": risk_score,
+            "pending_mfa_token": build_pending_mfa_token(
+                user_id=user["id"],
+                username=user["username"],
+                role=user["role"],
+                risk_score=risk_score
+            )
         }
 
     if action == "strong_mfa":
-
-        if not user["mfa_secret"] or user["mfa_enabled"] == 0:
-            return {
-                "status": "mfa_setup_required",
-                "user_id": user["id"],
-                "risk_score": risk_score
-            }
-
         return {
             "status": "strong_mfa_required",
-            "methods": ["webauthn"],
+            "methods": ["biometric", "email_otp"],
+            "message": "Strong MFA required. Risk score is high.",
             "user_id": user["id"],
-            "risk_score": risk_score
+            "risk_score": risk_score,
+            "pending_mfa_token": build_pending_mfa_token(
+                user_id=user["id"],
+                username=user["username"],
+                role=user["role"],
+                risk_score=risk_score
+            )
         }
 
     if action == "manager_approval":
@@ -261,9 +284,24 @@ async def login(data: dict, request: Request):
             resource=resource,
             risk_score=risk_score
         )
+        # Waiting user must call GET /api/approvals/status with Bearer auth.
+        # Issue a scoped JWT so the client can poll; approval_pending marks pre-approval.
+        approval_wait_token = create_token(
+            {
+                "sub": user["id"],
+                "username": user["username"],
+                "role": user["role"],
+                "risk_score": risk_score,
+                "approval_pending": True,
+            },
+            expiry_minutes=60,
+        )
         return {
             "status": "manager_approval_required",
-            "risk_score": risk_score
+            "approval_pending": True,
+            "risk_score": risk_score,
+            "access_token": approval_wait_token,
+            "token_type": "bearer",
         }
 
     # Default: ALLOW

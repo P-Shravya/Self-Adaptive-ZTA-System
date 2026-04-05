@@ -2,29 +2,16 @@
 <html>
 <head>
 <title>Waiting for Approval</title>
-<link rel="stylesheet" href="style.css">
-<style>
-  .spinner {
-    display: inline-block;
-    width: 18px; height: 18px;
-    border: 3px solid #ccc;
-    border-top-color: #2a5298;
-    border-radius: 50%;
-    animation: spin 0.9s linear infinite;
-    vertical-align: middle;
-    margin-right: 8px;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  #status-msg { margin-top: 16px; font-size: 0.9rem; color: #555; }
-</style>
+<link rel="stylesheet" href="style.css?v=3">
 </head>
 
-<body>
+<body class="login-body">
 
 <div class="dashboard">
   <h2>Manager Approval Required</h2>
   <p>Your access request has been sent to a manager.</p>
   <p><span class="spinner"></span> Waiting for approval — this page checks automatically.</p>
+  <p class="hint-text">If you open the manager login in this same browser, use a separate window or profile for the manager so this tab keeps your waiting-user token.</p>
   <p id="status-msg">Checking approval status…</p>
 </div>
 
@@ -33,22 +20,27 @@
 <script src="zta_notify.js"></script>
 <script>
 /*
- * FIX: Poll /api/approvals/status every 8 seconds so the user is
- * automatically redirected when a manager approves the request.
- * Previously this was a static page with no feedback loop at all.
- *
- * Backend requirement: expose GET /api/approvals/status that returns
- * { "status": "pending" | "approved" | "rejected" | "expired" }
- * for the currently authenticated user's latest request.
- * The endpoint should be protected by get_current_user dependency.
+ * Poll GET /api/approvals/status with the *waiting user's* JWT.
+ * localStorage is shared across all tabs on this origin — if the manager
+ * logs in on another tab, access_token becomes the manager's and polling
+ * would query the wrong user forever. We therefore prefer sessionStorage
+ * (approval_poll_token) set at login for this flow.
  */
 
-const token = localStorage.getItem("access_token");
 const redirectTo = localStorage.getItem("post_auth_redirect") || "dashboard.html";
+
+function getApprovalPollToken() {
+  const scoped = sessionStorage.getItem("approval_poll_token");
+  if (scoped) return scoped;
+  return localStorage.getItem("access_token");
+}
 let pollCount = 0;
-const MAX_POLLS = 60; // stop after ~8 minutes
+const MAX_POLLS = 120;
+let pollInterval = null;
+const POLL_MS = 3000;
 
 async function checkApprovalStatus() {
+  const token = getApprovalPollToken();
   if (!token) {
     window.location.href = "login.html";
     return;
@@ -56,33 +48,55 @@ async function checkApprovalStatus() {
 
   try {
     const res = await fetch("/api/approvals/status", {
+      cache: "no-store",
       headers: { "Authorization": "Bearer " + token }
     });
 
+    let data = {};
+    try {
+      data = await res.json();
+    } catch (e) {
+      data = {};
+    }
+
     if (!res.ok) {
+      const detail = data.detail != null
+        ? (typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail))
+        : ("HTTP " + res.status);
       document.getElementById("status-msg").innerText =
-        "Could not reach server. Retrying…";
+        "Could not check status (" + detail + "). Retrying…";
       return;
     }
 
-    const data = await res.json();
     const status = data.status;
 
     if (status === "approved") {
-      ztaNotify("✅ Access approved! Redirecting…", "success");
+      sessionStorage.removeItem("approval_poll_token");
+      if (data.access_token) {
+        localStorage.setItem("access_token", data.access_token);
+      }
+      ztaNotify("Your request was accepted. Opening your dashboard…", "success");
+      document.getElementById("status-msg").innerText = "Approved — redirecting…";
       clearInterval(pollInterval);
       setTimeout(() => {
         localStorage.removeItem("post_auth_redirect");
         window.location.href = redirectTo;
-      }, 1200);
+      }, 1500);
 
     } else if (status === "rejected") {
-      ztaNotify("❌ Your request was rejected by the manager.", "error");
+      sessionStorage.removeItem("approval_poll_token");
+      ztaNotify(
+        "Your access request was denied. You cannot proceed further. Please contact your manager or sign in again later.",
+        "error"
+      );
       clearInterval(pollInterval);
+      localStorage.removeItem("access_token");
+      localStorage.removeItem("login_risk_score");
       document.getElementById("status-msg").innerText =
-        "Access denied. Please contact your manager or try logging in again.";
+        "Your access request was denied. You cannot proceed further.";
 
     } else if (status === "expired") {
+      sessionStorage.removeItem("approval_poll_token");
       ztaNotify("⏰ Approval request expired. Please log in again.", "warning");
       clearInterval(pollInterval);
       setTimeout(() => window.location.href = "login.html", 2000);
@@ -90,9 +104,9 @@ async function checkApprovalStatus() {
     } else {
       // still pending
       pollCount++;
-      const elapsed = Math.round(pollCount * 8 / 60);
+      const elapsedMin = Math.round((pollCount * POLL_MS) / 60000);
       document.getElementById("status-msg").innerText =
-        `Still waiting… (~${elapsed} min elapsed)`;
+        `Still waiting… (~${elapsedMin} min elapsed)`;
 
       if (pollCount >= MAX_POLLS) {
         clearInterval(pollInterval);
@@ -106,9 +120,8 @@ async function checkApprovalStatus() {
   }
 }
 
-// Start polling immediately, then every 8 seconds
 checkApprovalStatus();
-const pollInterval = setInterval(checkApprovalStatus, 8000);
+pollInterval = setInterval(checkApprovalStatus, POLL_MS);
 </script>
 </body>
 </html>

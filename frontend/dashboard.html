@@ -2,10 +2,10 @@
 <html>
 <head>
     <title>ZTA Dashboard</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=2">
     <script src="zta_notify.js"></script>
 </head>
-<body>
+<body class="login-body">
 
 <div class="dashboard">
     <h2>Hospital Management System</h2>
@@ -19,7 +19,7 @@
         <a href="lab.html"       class="section-btn" data-api="/api/lab">Laboratory</a>
         <a href="emergency.html" class="section-btn" data-api="/api/dashboard">Emergency</a>
         <a href="settings.html"  class="section-btn" data-api="/api/dashboard">Settings</a>
-        <a href="mfa_setup.html" class="section-btn" data-api="none">Setup MFA</a>
+        <a href="mfa_setup.html?manual=1" class="section-btn" data-api="none">Setup MFA</a>
     </div>
 </div>
 
@@ -27,6 +27,18 @@
 
 <script src="guard.js"></script>
 <script>
+
+// Pre-approval sessions must not use the dashboard (only /api/approvals/status is allowed).
+(function redirectIfAwaitingApproval() {
+    const t = localStorage.getItem("access_token");
+    if (!t) return;
+    try {
+        const payload = JSON.parse(atob(t.split(".")[1]));
+        if (payload.approval_pending) {
+            window.location.replace("approval_wait.html");
+        }
+    } catch (e) { /* ignore */ }
+})();
 
 // =============================================
 // Mirrors resource_policy.py ROLE_ACCESS exactly

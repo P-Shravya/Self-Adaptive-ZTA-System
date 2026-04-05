@@ -2,7 +2,7 @@
 <html>
 <head>
     <title>Setup MFA</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=2">
 </head>
 <body class="login-body">
 
@@ -13,45 +13,71 @@
 
     <button onclick="generateQR()">Generate QR</button>
 
-    <div style="margin-top: 12px;">
-        <img id="qrImage" style="max-width: 240px; display:none;">
+    <div class="qr-wrap">
+        <img id="qrImage" class="qr-image">
     </div>
 
-    <div style="margin-top: 14px;">
+    <div class="continue-wrap">
         <button id="continueBtn" onclick="goToOtp()" style="display:none;">Continue to OTP Verification</button>
     </div>
 </div>
 
 <script>
+// Safety redirect:
+// This page should only be opened when user clicks "Setup MFA" explicitly.
+// Automatic step-up redirects must land on OTP page first.
+const params = new URLSearchParams(window.location.search);
+if (params.get("manual") !== "1") {
+    window.location.href = "mfa.html";
+}
+
 function getUserIdForSetup(){
-    // If user is already logged in, use the JWT.
+    // If user is already logged in, use the JWT (sub is always a string in JWT).
     const token = localStorage.getItem("access_token");
     if(token){
         try{
             const payload = JSON.parse(atob(token.split('.')[1]));
-            if(payload && payload.sub != null) return payload.sub;
+            if(payload && payload.sub != null) return parseInt(String(payload.sub), 10);
         }catch(e){}
     }
-    // If user was redirected here due to mfa_setup_required, login stored mfa_user.
     const mfaUser = localStorage.getItem("mfa_user");
-    if(mfaUser) return parseInt(mfaUser,10);
+    if(mfaUser) return parseInt(mfaUser, 10);
     return null;
 }
 
 async function generateQR(){
-    const user_id = getUserIdForSetup();
-    if(!user_id){
-        document.getElementById("msg").innerText = "No user found for MFA setup. Please login again.";
+    const mfaAuthToken = (
+        localStorage.getItem("pending_mfa_token") || localStorage.getItem("access_token") || ""
+    ).trim();
+    if(!mfaAuthToken){
+        document.getElementById("msg").innerText = "No MFA session token found. Please login again.";
         return;
     }
 
-    const res = await fetch("http://127.0.0.1:8000/mfa/setup",{
+    const res = await fetch("/mfa/setup",{
         method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({user_id:user_id})
+        headers:{
+            "Content-Type":"application/json",
+            "Authorization":"Bearer " + mfaAuthToken
+        },
+        body:JSON.stringify({
+            mfa_context_token: mfaAuthToken
+        })
     });
 
-    const data = await res.json();
+    let data = {};
+    try {
+        data = await res.json();
+    } catch (e) {
+        data = {};
+    }
+
+    if(!res.ok){
+        let err = data.detail;
+        if (err && typeof err === "object") err = JSON.stringify(err);
+        document.getElementById("msg").innerText = err || ("Failed to generate QR code (" + res.status + "). If 401, log in again — MFA setup session may have expired (60 min).");
+        return;
+    }
 
     if(data.qr_code_base64){
         const img = document.getElementById("qrImage");
@@ -60,11 +86,12 @@ async function generateQR(){
         document.getElementById("continueBtn").style.display = "inline-block";
         document.getElementById("msg").innerText = "Scan this QR in your authenticator app, then continue to OTP verification.";
     }else{
-        document.getElementById("msg").innerText = "Failed to generate QR code.";
+        document.getElementById("msg").innerText = data.detail || "Failed to generate QR code.";
     }
 }
 
 function goToOtp(){
+    localStorage.removeItem("mfa_setup_required");
     window.location.href = "mfa.html";
 }
 </script>

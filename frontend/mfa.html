@@ -2,7 +2,7 @@
 <html>
 <head>
 <title>MFA Verification</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=3">
 </head>
 
 <body class="login-body">
@@ -11,7 +11,7 @@
 
 <h2>Enter OTP</h2>
 
-<div style="position:absolute; top:16px; right:16px;">
+<div class="mfa-top-action">
     <button onclick="goToSetup()">Setup MFA</button>
 </div>
 
@@ -25,12 +25,19 @@
 
 <script>
 
+// If backend indicated the user hasn't enrolled MFA yet, show this message
+// while still landing on the OTP page (with a "Setup MFA" CTA).
+const mfaSetupRequired = localStorage.getItem("mfa_setup_required") === "1";
+if (mfaSetupRequired) {
+    document.getElementById("msg").innerText = "You haven't setup mfa please set up mfa.";
+}
+
 function getUserId() {
     const token = localStorage.getItem("access_token");
     if (token) {
         try {
             const payload = JSON.parse(atob(token.split('.')[1]));
-            if (payload && payload.sub != null) return parseInt(payload.sub, 10);
+            if (payload && payload.sub != null) return parseInt(String(payload.sub), 10);
         } catch(e) {}
     }
     const mfaUser = localStorage.getItem("mfa_user");
@@ -49,8 +56,11 @@ async function verifyOTP(){
 
     const otp = document.getElementById("otp").value;
     const user_id = getUserId();
+    const mfaAuthToken = (
+        localStorage.getItem("pending_mfa_token") || localStorage.getItem("access_token") || ""
+    ).trim();
 
-    if (!user_id) {
+    if (!user_id || !mfaAuthToken) {
         document.getElementById("msg").innerText = "Session expired. Please login again.";
         window.location.href = "login.html";
         return;
@@ -61,12 +71,14 @@ async function verifyOTP(){
     const response = await fetch("/mfa/verify", {
         method: "POST",
         headers: {
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + mfaAuthToken
         },
         body: JSON.stringify({
-            user_id: user_id,
+            user_id: parseInt(String(user_id), 10),
             otp: otp,
-            risk_score: getRiskScore()   // FIX: pass risk_score so post-MFA token preserves it
+            risk_score: getRiskScore(),
+            mfa_context_token: mfaAuthToken
         })
     });
 
@@ -76,6 +88,8 @@ async function verifyOTP(){
 
         localStorage.setItem("access_token", data.access_token);
         localStorage.removeItem("login_risk_score");
+        localStorage.removeItem("mfa_setup_required");
+        localStorage.removeItem("pending_mfa_token");
 
         const redirectTo = localStorage.getItem("post_auth_redirect") || "dashboard.html";
         localStorage.removeItem("post_auth_redirect");
@@ -90,7 +104,8 @@ async function verifyOTP(){
 }
 
 function goToSetup(){
-    window.location.href = "mfa_setup.html";
+    localStorage.removeItem("mfa_setup_required");
+    window.location.href = "mfa_setup.html?manual=1";
 }
 
 </script>

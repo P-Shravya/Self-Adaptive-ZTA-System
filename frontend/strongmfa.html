@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Strong MFA</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="style.css?v=3" />
+  <script src="zta_notify.js"></script>
+</head>
+
+<body class="login-body">
+  <div class="container">
+    <h1>Strong Verification Required</h1>
+    <p class="desc">
+      Choose one method to continue.
+    </p>
+
+    <div class="buttons">
+      <button id="bioBtn" class="primary" type="button">Biometric Verification (Fingerprint)</button>
+      <button id="emailBtn" class="secondary" type="button">Email OTP Verification</button>
+      <button id="registerBioBtn" class="secondary" type="button" style="display:none;">Register Fingerprint</button>
+    </div>
+
+    <div id="message" class="message info">Waiting for your selection…</div>
+    <div id="biometricSetupStatus" class="message info" style="margin-top: 12px;">
+      Checking fingerprint setup…
+    </div>
+  </div>
+
+  <div id="zta-notify-container"></div>
+
+  <script>
+    function setMessage(text, type = "info") {
+      const el = document.getElementById("message");
+      el.textContent = text;
+      el.className = "message " + type;
+    }
+
+    function getUserId() {
+      const token = localStorage.getItem("access_token");
+      if (token) {
+        try {
+          const payload = JSON.parse(atob(token.split('.')[1]));
+          if (payload && payload.sub != null) return parseInt(String(payload.sub), 10);
+        } catch(e) {}
+      }
+      const mfaUser = localStorage.getItem("mfa_user");
+      if (mfaUser) return parseInt(mfaUser, 10);
+      return null;
+    }
+
+    function getPendingMfaToken() {
+      return (localStorage.getItem("pending_mfa_token") || "").trim();
+    }
+
+    function setSetupStatus(text, type = "info") {
+      const el = document.getElementById("biometricSetupStatus");
+      el.textContent = text;
+      el.className = "message " + type;
+    }
+
+    async function loadBiometricStatus() {
+      const user_id = getUserId();
+      const pending = getPendingMfaToken();
+      if (!user_id || !pending) {
+        setSetupStatus("Fingerprint setup unavailable. Please login again.", "error");
+        return;
+      }
+
+      try {
+        const res = await fetch("/biometric/status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id, mfa_context_token: pending })
+        });
+
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setSetupStatus(data.detail || ("Fingerprint status failed (" + res.status + ")"), "error");
+          return;
+        }
+
+        if (data.registered) {
+          setSetupStatus("Fingerprint is already registered.", "info");
+          document.getElementById("registerBioBtn").style.display = "none";
+        } else {
+          setSetupStatus("Fingerprint is not registered yet. Register to use biometric verification.", "warning");
+          document.getElementById("registerBioBtn").style.display = "inline-block";
+        }
+      } catch (e) {
+        setSetupStatus("Network error checking fingerprint setup: " + e.message, "error");
+      }
+    }
+
+    async function emailOtpFlow() {
+      const pending = getPendingMfaToken();
+      if (!pending) {
+        setMessage("Session expired. Please login again.", "error");
+        window.location.href = "login.html";
+        return;
+      }
+      window.location.href = "emailotp.html";
+    }
+
+    document.getElementById("bioBtn").addEventListener("click", async () => {
+      if (typeof ztaNotify === "function") ztaNotify("Fingerprint verification requested.", "warning");
+      window.location.href = "biometric.html";
+    });
+
+    document.getElementById("emailBtn").addEventListener("click", async () => {
+      if (typeof ztaNotify === "function") ztaNotify("Email OTP verification requested.", "warning");
+      await emailOtpFlow();
+    });
+
+    document.getElementById("registerBioBtn").addEventListener("click", async () => {
+      if (typeof ztaNotify === "function") ztaNotify("Registering fingerprint with Windows Hello.", "warning");
+      window.location.href = "biometric.html";
+    });
+
+    loadBiometricStatus();
+  </script>
+</body>
+</html>
+

@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Biometric Verification</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="style.css?v=3" />
+  <script src="zta_notify.js"></script>
+</head>
+<body class="login-body">
+  <div class="container">
+    <h1>Biometric Verification</h1>
+    <p class="desc">Perform fingerprint verification using Windows Hello.</p>
+
+    <div class="buttons">
+      <button id="registerBtn" class="secondary" type="button">Register Fingerprint</button>
+      <button id="verifyBtn" class="primary" type="button">Verify Fingerprint</button>
+      <button id="backBtn" class="secondary" type="button">Back to Strong MFA</button>
+    </div>
+
+    <div id="message" class="message info">Click verify to continue.</div>
+    <div id="biometricSetupStatus" class="message info" style="margin-top: 12px;">Checking fingerprint setup…</div>
+  </div>
+  <div id="zta-notify-container"></div>
+
+  <script>
+    function setMessage(text, type = "info") {
+      const el = document.getElementById("message");
+      el.textContent = text;
+      el.className = "message " + type;
+    }
+
+    function getUserId() {
+      const token = localStorage.getItem("access_token");
+      if (token) {
+        try {
+          const payload = JSON.parse(atob(token.split('.')[1]));
+          if (payload && payload.sub != null) return parseInt(String(payload.sub), 10);
+        } catch(e) {}
+      }
+      const mfaUser = localStorage.getItem("mfa_user");
+      if (mfaUser) return parseInt(mfaUser, 10);
+      return null;
+    }
+
+    function getPendingMfaToken() {
+      return (localStorage.getItem("pending_mfa_token") || "").trim();
+    }
+
+    function setSetupStatus(text, type = "info") {
+      const el = document.getElementById("biometricSetupStatus");
+      el.textContent = text;
+      el.className = "message " + type;
+    }
+
+    function b64urlToUint8(b64url) {
+      const pad = "=".repeat((4 - (b64url.length % 4)) % 4);
+      const b64 = (b64url.replace(/-/g, "+").replace(/_/g, "/")) + pad;
+      const raw = window.atob(b64);
+      return Uint8Array.from(raw, c => c.charCodeAt(0));
+    }
+
+    function bufToB64url(buf) {
+      const bytes = new Uint8Array(buf);
+      let bin = "";
+      bytes.forEach(b => bin += String.fromCharCode(b));
+      return window.btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+    }
+
+    async function registerFingerprint() {
+      const user_id = getUserId();
+      const pending = getPendingMfaToken();
+      if (!user_id) {
+        setMessage("Session expired. Please login again.", "error");
+        window.location.href = "login.html";
+        return;
+      }
+      if (!pending) {
+        setMessage("Session expired. Please login again.", "error");
+        window.location.href = "login.html";
+        return;
+      }
+
+      if (!window.PublicKeyCredential || !navigator.credentials) {
+        setMessage("Biometric registration not supported in this browser. Use Edge or Chrome on Windows.", "error");
+        return;
+      }
+
+      try {
+        setMessage("Requesting registration options…", "info");
+        const optRes = await fetch("/biometric/register-options", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id, mfa_context_token: pending })
+        });
+        const optData = await optRes.json().catch(() => ({}));
+        if (!optRes.ok) {
+          setMessage(optData.detail || ("Registration options failed (" + optRes.status + ")"), "error");
+          return;
+        }
+
+        const publicKey = {
+          ...optData,
+          challenge: b64urlToUint8(optData.challenge),
+          user: { ...optData.user, id: b64urlToUint8(optData.user.id) },
+          excludeCredentials: (optData.excludeCredentials || []).map(c => ({
+            ...c,
+            id: b64urlToUint8(c.id)
+          }))
+        };
+
+        setMessage("Open Windows Hello and register fingerprint…", "warning");
+        const credential = await navigator.credentials.create({ publicKey });
+        if (!credential) throw new Error("No biometric credential returned.");
+
+        const att = credential.response;
+        const payload = {
+          user_id,
+          id: credential.id,
+          rawId: bufToB64url(credential.rawId),
+          type: credential.type,
+          response: {
+            clientDataJSON: bufToB64url(att.clientDataJSON),
+            attestationObject: bufToB64url(att.attestationObject)
+          }
+        };
+
+        setMessage("Saving registered fingerprint…", "info");
+        const verRes = await fetch("/biometric/register-verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...payload, mfa_context_token: pending })
+        });
+        const verData = await verRes.json().catch(() => ({}));
+        if (!verRes.ok) {
+          setMessage(verData.detail || ("Fingerprint registration failed (" + verRes.status + ")"), "error");
+          return;
+        }
+
+        setMessage("Fingerprint registered successfully. Now click Verify Fingerprint.", "success");
+        await loadBiometricStatus();
+      } catch (err) {
+        setMessage("Biometric registration error: " + err.message, "error");
+      }
+    }
+
+    async function verifyFingerprint() {
+      const user_id = getUserId();
+      const pending = getPendingMfaToken();
+      if (!user_id) {
+        setMessage("Session expired. Please login again.", "error");
+        window.location.href = "login.html";
+        return;
+      }
+      if (!pending) {
+        setMessage("Session expired. Please login again.", "error");
+        window.location.href = "login.html";
+        return;
+      }
+
+      if (!window.PublicKeyCredential || !navigator.credentials) {
+        setMessage("Biometric verification not supported in this browser. Use Edge or Chrome on Windows.", "error");
+        return;
+      }
+
+      try {
+        setMessage("Requesting biometric options from server…", "info");
+
+        const optRes = await fetch("/biometric/authenticate-options", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id, mfa_context_token: pending })
+        });
+        const optData = await optRes.json().catch(() => ({}));
+
+        if (!optRes.ok) {
+          setMessage(optData.detail || ("Biometric options failed (" + optRes.status + ")"), "error");
+          return;
+        }
+
+        const publicKey = {
+          ...optData,
+          challenge: b64urlToUint8(optData.challenge),
+          allowCredentials: (optData.allowCredentials || []).map(c => ({
+            ...c,
+            id: b64urlToUint8(c.id)
+          }))
+        };
+
+        setMessage("Open Windows Hello and scan fingerprint…", "warning");
+        const assertion = await navigator.credentials.get({ publicKey });
+        if (!assertion) throw new Error("No biometric assertion returned.");
+
+        const ar = assertion.response;
+        const verifyPayload = {
+          user_id,
+          id: assertion.id,
+          rawId: bufToB64url(assertion.rawId),
+          type: assertion.type,
+          response: {
+            clientDataJSON: bufToB64url(ar.clientDataJSON),
+            authenticatorData: bufToB64url(ar.authenticatorData),
+            signature: bufToB64url(ar.signature),
+            userHandle: ar.userHandle ? bufToB64url(ar.userHandle) : null
+          }
+        };
+
+        setMessage("Validating fingerprint with backend…", "info");
+        const verRes = await fetch("/biometric/authenticate-verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...verifyPayload, mfa_context_token: pending })
+        });
+        const verData = await verRes.json().catch(() => ({}));
+
+        if (!verRes.ok) {
+          setMessage(verData.detail || ("Fingerprint verification failed (" + verRes.status + ")"), "error");
+          return;
+        }
+
+        if (verData.access_token) localStorage.setItem("access_token", verData.access_token);
+        localStorage.removeItem("pending_mfa_token");
+        localStorage.removeItem("mfa_user");
+        localStorage.removeItem("login_risk_score");
+
+        setMessage("Fingerprint verified successfully. Redirecting to dashboard…", "success");
+        setTimeout(() => {
+          const redirectTo = localStorage.getItem("post_auth_redirect") || "dashboard.html";
+          localStorage.removeItem("post_auth_redirect");
+          window.location.href = redirectTo;
+        }, 700);
+      } catch (err) {
+        setMessage("Biometric verification error: " + err.message, "error");
+      }
+    }
+
+    async function loadBiometricStatus() {
+      const user_id = getUserId();
+      const pending = getPendingMfaToken();
+      if (!user_id || !pending) {
+        setSetupStatus("Fingerprint setup unavailable. Please login again.", "error");
+        document.getElementById("verifyBtn").disabled = true;
+        return;
+      }
+
+      try {
+        const res = await fetch("/biometric/status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id, mfa_context_token: pending })
+        });
+
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setSetupStatus(data.detail || ("Fingerprint status failed (" + res.status + ")"), "error");
+          document.getElementById("verifyBtn").disabled = true;
+          return;
+        }
+
+        if (data.registered) {
+          setSetupStatus("Fingerprint is registered. You can verify now.", "info");
+          document.getElementById("verifyBtn").disabled = false;
+        } else {
+          setSetupStatus("Fingerprint is not registered yet. Click Register first.", "warning");
+          document.getElementById("verifyBtn").disabled = true;
+        }
+      } catch (e) {
+        setSetupStatus("Network error checking fingerprint setup: " + e.message, "error");
+        document.getElementById("verifyBtn").disabled = true;
+      }
+    }
+
+    document.getElementById("verifyBtn").addEventListener("click", async () => {
+      if (typeof ztaNotify === "function") ztaNotify("Perform fingerprint verification in Windows Hello.", "warning");
+      await verifyFingerprint();
+    });
+    document.getElementById("registerBtn").addEventListener("click", async () => {
+      if (typeof ztaNotify === "function") ztaNotify("Register fingerprint in Windows Hello.", "warning");
+      await registerFingerprint();
+    });
+
+    document.getElementById("backBtn").addEventListener("click", () => {
+      window.location.href = "strongmfa.html";
+    });
+
+    loadBiometricStatus();
+  </script>
+</body>
+</html>
+

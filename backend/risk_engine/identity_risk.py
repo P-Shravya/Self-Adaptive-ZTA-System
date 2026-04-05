@@ -61,12 +61,14 @@ def calculate_identity_risk(meta: dict, baseline: dict, db=None):
             db = get_db()
             _owns_db = True
 
+        # Wider window so a few successful logins after seeded failures do not
+        # immediately drop brute_force_pattern (needed for stable manager-approval demos).
         recent_logs = db.execute("""
             SELECT action
             FROM behavior_logs
             WHERE user_id=?
             ORDER BY timestamp DESC
-            LIMIT 5
+            LIMIT 20
         """, (meta.get("user_id"),)).fetchall()
 
         recent_failed = sum(

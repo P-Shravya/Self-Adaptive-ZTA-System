@@ -1,6 +1,6 @@
 # backend/routers/audit_router.py
 # Audit Log - admin/manager only endpoint
-# Returns paginated behavior_logs + approval_logs + face_auth_logs
+# Returns paginated behavior_logs + approval_logs
 
 from fastapi import APIRouter, Depends, Query
 from backend.database import get_db
@@ -119,54 +119,6 @@ def get_approval_logs(
     }
 
 
-@router.get("/face-logs")
-def get_face_logs(
-    page: int = Query(1, ge=1),
-    limit: int = Query(50, ge=1, le=200),
-    user=Depends(require_manager)
-):
-    """Face authentication attempt history."""
-    db = get_db()
-    cursor = db.cursor()
-    offset = (page - 1) * limit
-
-    # Create table if not yet created
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS face_auth_logs (
-            id        INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id   INTEGER NOT NULL,
-            verified  INTEGER NOT NULL,
-            distance  REAL,
-            timestamp TEXT NOT NULL
-        )
-    """)
-
-    rows = cursor.execute("""
-        SELECT
-            fl.id,
-            fl.user_id,
-            u.username,
-            u.role,
-            fl.verified,
-            fl.distance,
-            fl.timestamp
-        FROM face_auth_logs fl
-        LEFT JOIN users u ON fl.user_id = u.id
-        ORDER BY fl.timestamp DESC
-        LIMIT ? OFFSET ?
-    """, [limit, offset]).fetchall()
-
-    total = cursor.execute("SELECT COUNT(*) as cnt FROM face_auth_logs").fetchone()["cnt"]
-    db.close()
-
-    return {
-        "logs": [dict(r) for r in rows],
-        "total": total,
-        "page": page,
-        "limit": limit
-    }
-
-
 @router.get("/stats")
 def get_audit_stats(user=Depends(require_manager)):
     """High-level stats for the audit dashboard header."""
@@ -179,14 +131,6 @@ def get_audit_stats(user=Depends(require_manager)):
     blocked        = cursor.execute("SELECT COUNT(*) as c FROM approval_logs WHERE decision='rejected'").fetchone()["c"]
     approved       = cursor.execute("SELECT COUNT(*) as c FROM approval_logs WHERE decision='approved'").fetchone()["c"]
 
-    # Face auth stats (table may not exist yet)
-    try:
-        cursor.execute("CREATE TABLE IF NOT EXISTS face_auth_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, verified INTEGER, distance REAL, timestamp TEXT)")
-        face_pass = cursor.execute("SELECT COUNT(*) as c FROM face_auth_logs WHERE verified=1").fetchone()["c"]
-        face_fail = cursor.execute("SELECT COUNT(*) as c FROM face_auth_logs WHERE verified=0").fetchone()["c"]
-    except Exception:
-        face_pass = face_fail = 0
-
     db.close()
 
     return {
@@ -194,7 +138,5 @@ def get_audit_stats(user=Depends(require_manager)):
         "failed_logins": failed_logins,
         "vpn_detected":  vpn_detected,
         "blocked":       blocked,
-        "approved":      approved,
-        "face_pass":     face_pass,
-        "face_fail":     face_fail
+        "approved":      approved
     }

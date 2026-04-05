@@ -2,7 +2,7 @@
 <html>
 <head>
     <title>ZTA Login</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=2">
     <script src="zta_notify.js"></script>
 </head>
 <body class="login-body">
@@ -47,13 +47,20 @@ document.getElementById("loginForm").onsubmit = async function(e) {
 
         const response = await fetch("/api/login", {
             method: "POST",
+            cache: "no-store",
             headers: {
                 "Content-Type": "application/json"
             },
             body: JSON.stringify({ email, password })
         });
 
-        data = await response.json();
+        const raw = await response.text();
+        try {
+            data = raw ? JSON.parse(raw) : {};
+        } catch (parseErr) {
+            // Backend may return plain text on 500; keep message useful.
+            throw new Error(raw || ("Server returned non-JSON response (" + response.status + ")"));
+        }
 
         if (!response.ok && !data.status) {
             throw new Error(data.detail || "Server returned " + response.status);
@@ -70,21 +77,27 @@ document.getElementById("loginForm").onsubmit = async function(e) {
         return;
     }
 
+    // Step-up responses may include access_token (e.g. manager poll JWT). Check
+    // status *before* treating any token as full dashboard access.
+
     // ==========================
-    // NORMAL LOGIN SUCCESS
+    // MANAGER APPROVAL REQUIRED
     // ==========================
 
-    if (data.access_token) {
+    if (data.status === "manager_approval_required" || data.approval_pending) {
 
-        ztaNotify("Login successful. Access granted.", "success");
+        ztaNotify("Critical risk detected. Manager approval required", "error");
 
-        ztaNotify("Credentials verified by backend", "success");
-        ztaNotify("Collecting behavioral metadata...", "success");
-        ztaNotify("Evaluating risk score using ZTA engine...", "success");
+        if (data.access_token) {
+            localStorage.setItem("access_token", data.access_token);
+            // Tab-scoped: another tab logging in as the manager must not overwrite this.
+            sessionStorage.setItem("approval_poll_token", data.access_token);
+        }
+        if (data.risk_score != null) {
+            localStorage.setItem("login_risk_score", data.risk_score);
+        }
 
-        localStorage.setItem("access_token", data.access_token);
-
-        window.location.href = "dashboard.html";
+        window.location.href = "approval_wait.html";
         return;
     }
 
@@ -96,6 +109,11 @@ document.getElementById("loginForm").onsubmit = async function(e) {
 
         localStorage.setItem("mfa_user", data.user_id);
         localStorage.setItem("login_risk_score", data.risk_score || 0);
+        if (data.pending_mfa_token) {
+            localStorage.setItem("pending_mfa_token", data.pending_mfa_token);
+        } else {
+            ztaNotify("MFA error: missing session token from server. Restart backend and try again.", "error");
+        }
 
         ztaNotify("Risk detected. MFA verification required", "warning");
 
@@ -111,10 +129,16 @@ document.getElementById("loginForm").onsubmit = async function(e) {
 
         localStorage.setItem("mfa_user", data.user_id);
         localStorage.setItem("login_risk_score", data.risk_score || 0);
+        if (data.pending_mfa_token) {
+            localStorage.setItem("pending_mfa_token", data.pending_mfa_token);
+        } else {
+            ztaNotify("MFA error: missing session token from server. Restart backend and try again.", "error");
+        }
 
-        ztaNotify("MFA setup required. Please scan authenticator.", "warning");
-
-        window.location.href = "mfa_setup.html";
+        // UX requirement: land on OTP page first, but show the setup CTA.
+        localStorage.setItem("mfa_setup_required", "1");
+        ztaNotify("You haven't setup mfa please set up mfa.", "warning");
+        window.location.href = "mfa.html";
         return;
     }
 
@@ -127,22 +151,34 @@ document.getElementById("loginForm").onsubmit = async function(e) {
 
         localStorage.setItem("mfa_user", data.user_id);
         localStorage.setItem("login_risk_score", data.risk_score || 0);
+        if (data.pending_mfa_token) {
+            localStorage.setItem("pending_mfa_token", data.pending_mfa_token);
+        } else {
+            ztaNotify("MFA error: missing session token from server. Restart backend and try again.", "error");
+        }
 
-        ztaNotify("High risk detected. WebAuthn authentication required", "warning");
+        ztaNotify(data.message || "Strong MFA required. Risk score is high.", "warning");
 
-        window.location.href = "webauthn.html";
+        window.location.href = "strongmfa.html";
         return;
     }
 
     // ==========================
-    // MANAGER APPROVAL REQUIRED
+    // NORMAL LOGIN SUCCESS (allow / monitor — no step-up status)
     // ==========================
 
-    if (data.status === "manager_approval_required") {
+    if (data.access_token) {
 
-        ztaNotify("Critical risk detected. Manager approval required", "error");
+        ztaNotify("Login successful. Access granted.", "success");
 
-        window.location.href = "approval_wait.html";
+        ztaNotify("Credentials verified by backend", "success");
+        ztaNotify("Collecting behavioral metadata...", "success");
+        ztaNotify("Evaluating risk score using ZTA engine...", "success");
+
+        localStorage.setItem("access_token", data.access_token);
+        localStorage.removeItem("pending_mfa_token");
+
+        window.location.href = "dashboard.html";
         return;
     }
 
